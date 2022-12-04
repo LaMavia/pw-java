@@ -7,6 +7,7 @@ import java.util.concurrent.Semaphore;
 public class OrderlyWorkplace extends Workplace {
     // awaitingUse: State = Done && other[enter(this)]
     private final Semaphore ownership = new Semaphore(1, true);
+    private int awaitingOwnership = 0;
     // state
     private WorkplaceState state = WorkplaceState.Empty;
     private long userId = 0;
@@ -27,14 +28,30 @@ public class OrderlyWorkplace extends Workplace {
     }
 
     public boolean isOccupied() {
-        return ! (userId == Thread.currentThread().getId() || state == WorkplaceState.Empty);
+        return !(userId == Thread.currentThread().getId() || state == WorkplaceState.Empty);
+    }
+
+    private boolean isAwaited() {
+        return awaitingOwnership > 0;
+    }
+
+    public int getAwaitingOwnership() {
+        return awaitingOwnership;
     }
 
     public void occupy(Semaphore mutex) throws InterruptedException {
-        if (isOccupied()) {
+        var willAwait = isOccupied();
+        if (willAwait) {
+            awaitingOwnership++;
             mutex.release();
         }
+
         ownership.acquire();
+
+        if (willAwait) {
+            awaitingOwnership--;
+        }
+
         userId = Thread.currentThread().getId();
         state = WorkplaceState.Before;
     }

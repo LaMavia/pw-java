@@ -52,8 +52,8 @@ public class OrderlyWorkshop implements Workshop {
             for (var entry : workplaces.entrySet()) {
                 var workplace = entry.getValue();
                 builder.append(
-                        String.format("%s (%s) -> %s (occupied: %s)\n",
-                                entry.getKey(), workplace.getState(), workplace.getUserId(), workplace.isOccupied())
+                        String.format("%s (%s) -> %s (awaiting: %d)\n",
+                                entry.getKey(), workplace.getState(), workplace.getUserId(), workplace.getAwaitingOwnership())
                 );
             }
         }
@@ -111,10 +111,12 @@ public class OrderlyWorkshop implements Workshop {
             var workplace = workplaces.get(wid);
 
             if (workplace.isOccupied()) {
+                logState(String.format("enter[%s]->occupied", wid));
                 mutex.release();
                 queue.await(myTime);
             }
 
+            logState(String.format("enter[%s]->occupying", wid));
             workplace.occupy(mutex);
             workplaces.updateMapping(workplace);
             mutex.release();
