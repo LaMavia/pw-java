@@ -27,7 +27,7 @@ public class OrderlyWorkplace extends Workplace {
     }
 
     public boolean isOccupied() {
-        return state != WorkplaceState.Empty;
+        return ! (userId == Thread.currentThread().getId() || state == WorkplaceState.Empty);
     }
 
     public void occupy(Semaphore mutex) throws InterruptedException {
