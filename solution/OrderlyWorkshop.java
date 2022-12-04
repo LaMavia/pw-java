@@ -13,11 +13,11 @@ public class OrderlyWorkshop implements Workshop {
         private final HashMap<WorkplaceId, OrderlyWorkplace> workplaces;
         private final HashMap<Long, WorkplaceId> users;
 
-        public WorkplaceMap(Collection<Workplace> workplaces) {
+        public WorkplaceMap(Collection<Workplace> workplaces, SemaphoreQueue queue) {
             this.workplaces = new HashMap<>(workplaces.size());
 
             for (var workplace : workplaces) {
-                this.workplaces.put(workplace.getId(), new OrderlyWorkplace(workplace));
+                this.workplaces.put(workplace.getId(), new OrderlyWorkplace(workplace, queue));
             }
 
             this.users = new HashMap<>();
@@ -53,7 +53,7 @@ public class OrderlyWorkshop implements Workshop {
                 var workplace = entry.getValue();
                 builder.append(
                         String.format("%s (%s) -> %s (awaiting: %d)\n",
-                                entry.getKey(), workplace.getState(), workplace.getUserId(), workplace.getAwaitingOwnership())
+                                entry.getKey(), workplace.getState(), workplace.getUserId(), workplace.getAwaiting())
                 );
             }
         }
@@ -67,7 +67,7 @@ public class OrderlyWorkshop implements Workshop {
 
     public OrderlyWorkshop(Collection<Workplace> workplaces) {
         queue = new SemaphoreQueue(workplaces.size() * 2);
-        this.workplaces = new WorkplaceMap(workplaces);
+        this.workplaces = new WorkplaceMap(workplaces, queue);
     }
 
     private void leaveCurrentWorkplace(boolean release) {
@@ -134,19 +134,18 @@ public class OrderlyWorkshop implements Workshop {
     public Workplace switchTo(WorkplaceId wid) {
         try {
             mutex.acquire();
-            logState("switchTo");
             var myTime = currentTime++;
             var workplace = workplaces.get(wid);
 
             if (workplace.isOccupied()) {
-                logState("switchTo->occupied");
+                logState(String.format("switchTo[%s]->occupied", wid));
                 mutex.release();
                 queue.await(myTime);
             }
 
-            logState("switchTo->leaving current");
+            logState(String.format("switchTo[%s]->leaving current", wid));
             leaveCurrentWorkplace(false);
-            logState(String.format("switchTo->occupying %s", wid));
+            logState(String.format("switchTo[%s]->occupying", wid));
             workplace.occupy(mutex);
             workplaces.updateMapping(workplace);
             logState("switchTo->done");

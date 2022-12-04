@@ -5,13 +5,13 @@ import cp2022.base.Workplace;
 import java.util.concurrent.Semaphore;
 
 public class OrderlyWorkplace extends Workplace {
-    // awaitingUse: State = Done && other[enter(this)]
     private final Semaphore ownership = new Semaphore(1, true);
-    private int awaitingOwnership = 0;
+    private int awaiting = 0;
     // state
     private WorkplaceState state = WorkplaceState.Empty;
     private long userId = 0;
     private final Workplace internalWorkplace;
+    private final SemaphoreQueue queue;
     // private Semaphore mutex = new Semaphore(1, true);
 
     public enum WorkplaceState {
@@ -22,34 +22,35 @@ public class OrderlyWorkplace extends Workplace {
         return state;
     }
 
-    public OrderlyWorkplace(Workplace workplace) {
+    public OrderlyWorkplace(Workplace workplace, SemaphoreQueue queue) {
         super(workplace.getId());
         internalWorkplace = workplace;
+        this.queue = queue;
     }
 
     public boolean isOccupied() {
-        return !(userId == Thread.currentThread().getId() || state == WorkplaceState.Empty);
+        return !(userId == Thread.currentThread().getId() || state != WorkplaceState.Before);
     }
 
     private boolean isAwaited() {
-        return awaitingOwnership > 0;
+        return awaiting > 0;
     }
 
-    public int getAwaitingOwnership() {
-        return awaitingOwnership;
+    public int getAwaiting() {
+        return awaiting;
     }
 
     public void occupy(Semaphore mutex) throws InterruptedException {
         var willAwait = isOccupied();
         if (willAwait) {
-            awaitingOwnership++;
+            awaiting++;
             mutex.release();
         }
 
         ownership.acquire();
 
         if (willAwait) {
-            awaitingOwnership--;
+            awaiting--;
         }
 
         userId = Thread.currentThread().getId();
@@ -60,6 +61,7 @@ public class OrderlyWorkplace extends Workplace {
     public void use() {
         internalWorkplace.use();
         state = WorkplaceState.Done;
+        queue.signal();
     }
 
     /* true is state->Empty */
