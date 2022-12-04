@@ -1,21 +1,19 @@
 package cp2022.solution;
 
 import cp2022.base.Workplace;
-import cp2022.base.WorkplaceId;
 
 import java.util.concurrent.Semaphore;
 
 public class OrderlyWorkplace extends Workplace {
     // awaitingUse: State = Done && other[enter(this)]
-    private boolean isAwaiting = false;
-    private Semaphore awaitingDelay = new Semaphore(0); // fairness doesn't matter
+    private final Semaphore ownership = new Semaphore(1, true);
     // state
     private WorkplaceState state = WorkplaceState.Empty;
     private long userId = 0;
     private final Workplace internalWorkplace;
     // private Semaphore mutex = new Semaphore(1, true);
 
-    public static enum WorkplaceState {
+    public enum WorkplaceState {
         Empty, Before, Done
     }
 
@@ -28,37 +26,30 @@ public class OrderlyWorkplace extends Workplace {
         internalWorkplace = workplace;
     }
 
-    public boolean isAwaited() {
-        return isAwaiting;
+    public boolean isOccupied() {
+        return state != WorkplaceState.Empty;
     }
 
-    public void await() throws InterruptedException {
-        isAwaiting = true;
-        awaitingDelay.acquire();
-        isAwaiting = false;
-    }
-
-    public synchronized void occupy() {
+    public void occupy(Semaphore mutex) throws InterruptedException {
+        if (isOccupied()) {
+            mutex.release();
+        }
+        ownership.acquire();
         userId = Thread.currentThread().getId();
         state = WorkplaceState.Before;
     }
 
     @Override
-    public synchronized void use() {
+    public void use() {
         internalWorkplace.use();
         state = WorkplaceState.Done;
     }
 
     /* true is state->Empty */
-    public synchronized boolean leave() {
+    public void leave() {
         userId = 0;
         state = WorkplaceState.Empty;
-
-        return isAwaiting;
-    }
-
-    public void signal() {
-        awaitingDelay.release();
+        ownership.release();
     }
 
     public long getUserId() {
