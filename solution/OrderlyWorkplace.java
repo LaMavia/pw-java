@@ -2,12 +2,14 @@ package cp2022.solution;
 
 import cp2022.base.Workplace;
 
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
 
 public class OrderlyWorkplace extends Workplace {
     // private final Semaphore ownership = new Semaphore(1, true);
     private final Semaphore delay = new Semaphore(0, true);
     private final Semaphore mutex = new Semaphore(1, true);
+    private CountDownLatch latch, doneLatch;
     private int awaiting = 0;
     // state
     private WorkplaceState state = WorkplaceState.Empty;
@@ -57,8 +59,33 @@ public class OrderlyWorkplace extends Workplace {
         return awaiting;
     }
 
+    public void giveLatch(CountDownLatch l, CountDownLatch dl) {
+        latch = l;
+        doneLatch = dl;
+    }
+
+    public void awaitLatch() throws InterruptedException {
+        latch.countDown();
+        latch.await();
+    }
+
+    public boolean hasLatch() {
+        return latch != null && latch.getCount() > 0;
+    }
+
+    public void awaitDoneLatch() throws InterruptedException {
+        doneLatch.await();
+    }
+
+    public void bumpDoneLatch() throws InterruptedException {
+        doneLatch.countDown();
+    }
+
     public void log(StringBuilder builder) {
-        builder.append(String.format("uid: %s, pid: %s, state: %s, awaiting: %s", userId, Thread.currentThread().getId(), state, awaiting));
+        builder.append(
+                String.format("%s (%s) -> %s (awaiting: %d, delay: %s, mutex: %s)\n",
+                        getId(), getState(), getUserId(), getAwaiting(), delay.availablePermits(), mutex.availablePermits() )
+        );
     }
 
     public void occupy() throws InterruptedException {
@@ -75,6 +102,9 @@ public class OrderlyWorkplace extends Workplace {
             mutex.acquire();
             internalWorkplace.use();
             state = WorkplaceState.Done;
+            var b = new StringBuilder();
+            log(b);
+            System.out.println("use: " + b.toString());
             mutex.release();
         } catch (InterruptedException e) {
             ErrorHandling.panic();

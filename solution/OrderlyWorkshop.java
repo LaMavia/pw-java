@@ -6,21 +6,22 @@ import cp2022.base.Workshop;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
 
 public class OrderlyWorkshop implements Workshop {
     private static class WorkplaceMap {
-        private final HashMap<WorkplaceId, OrderlyWorkplace> workplaces;
-        private final HashMap<Long, WorkplaceId> users;
+        private final ConcurrentHashMap<WorkplaceId, OrderlyWorkplace> workplaces;
+        private final ConcurrentHashMap<Long, WorkplaceId> users;
 
         public WorkplaceMap(Collection<Workplace> workplaces, SemaphoreQueue queue) {
-            this.workplaces = new HashMap<>(workplaces.size());
+            this.workplaces = new ConcurrentHashMap<>(workplaces.size());
 
             for (var workplace : workplaces) {
                 this.workplaces.put(workplace.getId(), new OrderlyWorkplace(workplace));
             }
 
-            this.users = new HashMap<>();
+            this.users = new ConcurrentHashMap<>();
         }
 
         public synchronized OrderlyWorkplace getThroughUser(long uid) {
@@ -51,10 +52,7 @@ public class OrderlyWorkshop implements Workshop {
         public void logState(StringBuilder builder) {
             for (var entry : workplaces.entrySet()) {
                 var workplace = entry.getValue();
-                builder.append(
-                        String.format("%s (%s) -> %s (awaiting: %d)\n",
-                                entry.getKey(), workplace.getState(), workplace.getUserId(), workplace.getAwaiting())
-                );
+                workplace.log(builder);
             }
         }
     }
@@ -77,10 +75,11 @@ public class OrderlyWorkshop implements Workshop {
                 return to;
             }
         }
+
         private final ConcurrentHashMap<WorkplaceId, WorkplaceId> matrix;
 
-        public Requests(int n) {
-            matrix = new ConcurrentHashMap<>(n);
+        public Requests(long n) {
+            matrix = new ConcurrentHashMap<>((int) n);
         }
 
         public Edge add(WorkplaceId from, WorkplaceId to) {
@@ -88,8 +87,10 @@ public class OrderlyWorkshop implements Workshop {
 
             return new Edge(from, to);
         }
+
         public void remove(Edge e) {
-            matrix.remove(e.getFrom(), e.getTo());
+            matrix.remove(e.getFrom());
+            // matrix.remove(e.getFrom(), e.getTo());
         }
 
         // Cycle := getCycle(e)
@@ -97,7 +98,6 @@ public class OrderlyWorkshop implements Workshop {
             var seenNodes = new HashSet<WorkplaceId>();
             var currentNode = e.getTo();
 
-            seenNodes.add(e.getFrom());
             while (matrix.containsKey(currentNode)) {
                 if (seenNodes.contains(currentNode)) {
                     break;
@@ -112,6 +112,7 @@ public class OrderlyWorkshop implements Workshop {
     }
 
     private final SemaphoreQueue queue;
+    private final Requests requests;
     private final WorkplaceMap workplaces;
     private final Semaphore mutex = new Semaphore(1, true);
 
@@ -122,12 +123,13 @@ public class OrderlyWorkshop implements Workshop {
         queue = new SemaphoreQueue(workplaces.size() * 2);
         this.workplaces = new WorkplaceMap(workplaces, queue);
         n = workplaces.size();
+        requests = new Requests(n);
     }
 
     private void logState(String label) {
         var builder = new StringBuilder();
         builder.append("-----------------------------\n")
-                .append(String.format("uid: %d, t: %d, %s\n", Identification.uid(), currentTime, label));
+                .append(String.format("uid: %d, t: %d, mutex: %s, %s\n", Identification.uid(), currentTime, mutex.availablePermits(), label));
         workplaces.logState(builder);
         builder.append("-----------------------------\n");
         System.out.println(builder);
@@ -135,8 +137,7 @@ public class OrderlyWorkshop implements Workshop {
 
 
     private boolean shouldWait(long myTime) {
-        if (queue.isEmpty()) return false;
-        return Math.abs(myTime - queue.minTime()) >= n - 1;
+        return !queue.isEmpty() && Math.abs(myTime - queue.minTime()) >= n - 1;
     }
 
     @Override
@@ -146,8 +147,9 @@ public class OrderlyWorkshop implements Workshop {
             var workplace = workplaces.get(wid);
             var time = currentTime++;
 
-            if (!queue.isEmpty() && shouldWait(time)) {
+            if (shouldWait(time)) {
                 // logState(String.format("enter[%s->%s] queue.await(%s)", Identification.uid(), wid, time));
+                mutex.release();
                 queue.await(time);
             }
 
@@ -173,11 +175,91 @@ public class OrderlyWorkshop implements Workshop {
 
     @Override
     public Workplace switchTo(WorkplaceId wid) {
-//        try {
-//
-//        } catch (InterruptedException e) {
-//            ErrorHandling.panic();
-//        }
+        try {
+            logState(String.format("switch_to[%s->%s]->getting mutex", Identification.uid(), wid));
+            mutex.acquire();
+            logState(String.format("switch_to[%s->%s]->got mutex", Identification.uid(), wid));
+            var workplace = workplaces.get(wid);
+            var uid = Identification.uid();
+            var current = workplaces.getThroughUser(uid);
+            assert current != null;
+            var time = currentTime++;
+
+            if (shouldWait(time)) {
+                logState(String.format("switch_to[%s->%s]->queue.await(%s)", Identification.uid(), wid, time));
+                mutex.release();
+                queue.await(time);
+            }
+            if (!workplace.isAwaited() && workplace.isEmpty()) {
+                logState(String.format("switch_to[%s->%s]->free->occupying", Identification.uid(), wid));
+
+                workplace.occupy();
+                current.leave();
+                workplaces.updateMapping(workplace);
+                workplaces.updateMapping(current);
+
+                if (current.isAwaited()) {
+                    logState(String.format("switch_to[%s->%s]->free->signal", Identification.uid(), wid));
+                    current.signal();
+                } else {
+                    mutex.release();
+                }
+
+                return workplace;
+            }
+
+            var e = requests.add(current.getId(), wid);
+            var cycle = requests.getCycle(e);
+            CountDownLatch doneLatch = null;
+
+            if (cycle != null) {
+                StringBuilder b = new StringBuilder();
+                b.append(String.format("switch_to[%s->%s]->occupied->cycle", Identification.uid(), wid))
+                        .append(Arrays.toString(cycle.toArray()));
+                logState(b.toString());
+
+                doneLatch = new CountDownLatch(cycle.size());
+                var latch = new CountDownLatch(cycle.size());
+                for (var p : cycle) {
+                    workplaces.get(p).giveLatch(latch, doneLatch);
+                }
+            } else {
+                logState(String.format("switch_to[%s->%s]->occupied->no cycle", Identification.uid(), wid));
+                mutex.release();
+                workplace.await();
+            }
+
+            var cascades = current.hasLatch();
+
+            logState(String.format("switch_to[%s->%s]->occupied->occupying[cas:%s]", Identification.uid(), wid, cascades));
+            workplace.occupy();
+            workplaces.updateMapping(workplace);
+            if (!cascades) {
+                current.leave();
+                workplaces.updateMapping(current);
+            }
+            requests.remove(e);
+            if (current.isAwaited()) {
+                logState(String.format("switch_to[%s->%s]->occupied->signaling", Identification.uid(), wid));
+                current.signal();
+            } else if (!cascades) {
+                mutex.release();
+            }
+
+            if (cascades) {
+                logState(String.format("switch_to[%s->%s]->occupied->cyclic->latching", Identification.uid(), wid));
+                current.bumpDoneLatch();
+                current.awaitLatch();
+                if (doneLatch != null) {
+                    current.awaitDoneLatch();
+                    mutex.release();
+                }
+            }
+
+            return workplace;
+        } catch (InterruptedException e) {
+            ErrorHandling.panic();
+        }
 
         return null;
     }
@@ -186,16 +268,20 @@ public class OrderlyWorkshop implements Workshop {
     public void leave() {
         try {
             mutex.acquire();
+            logState(String.format("leave[%s]->workplace", Identification.uid()));
             var workplace = workplaces.getThroughUser(Identification.uid());
             assert workplace != null;
 
             workplace.leave();
             workplaces.updateMapping(workplace);
             if (workplace.isAwaited()) {
+                logState(String.format("leave[%s:%s]->workplace", Identification.uid(), workplace.getId()));
                 workplace.signal();
             } else if (!queue.isEmpty()) {
+                logState(String.format("leave[%s:%s]->queue", Identification.uid(), workplace.getId()));
                 queue.signal();
             } else {
+                logState(String.format("leave[%s:%s]->mutex.V", Identification.uid(), workplace.getId()));
                 mutex.release();
             }
         } catch (InterruptedException e) {
@@ -231,7 +317,7 @@ switch(wid):
                 { (latch) => this.latch = latch; }
         else:
             mutex.V()
-            workplace.delay.P() { #awaited++; P(); }
+            current.delay.P() { #awaited++; P(); }
         workplace.occupy()
         current.leave()
         requests.remove(e)
