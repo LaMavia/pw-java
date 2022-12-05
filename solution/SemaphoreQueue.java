@@ -1,5 +1,6 @@
 package cp2022.solution;
 
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.PriorityQueue;
 import java.util.concurrent.Semaphore;
@@ -26,6 +27,11 @@ public class SemaphoreQueue {
             public int compare(SemaphoreQueueItem a, SemaphoreQueueItem b) {
                 return Long.compare(a.time, b.time);
             }
+        }
+
+        @Override
+        public String toString() {
+            return String.valueOf(time);
         }
     }
 
@@ -72,5 +78,10 @@ public class SemaphoreQueue {
         System.out.println(b);
 
         item.signal();
+    }
+
+    @Override
+    public String toString() {
+        return Arrays.toString(queue.toArray());
     }
 }

@@ -129,7 +129,9 @@ public class OrderlyWorkshop implements Workshop {
     private void logState(String label) {
         var builder = new StringBuilder();
         builder.append("-----------------------------\n")
-                .append(String.format("uid: %d, t: %d, mutex: %s, %s\n", Identification.uid(), currentTime, mutex.availablePermits(), label));
+                .append(String.format("uid: %d, t: %d, mutex: %s, %s\n", Identification.uid(), currentTime, mutex.availablePermits(), label))
+                .append(queue.toString())
+                .append('\n');
         workplaces.logState(builder);
         builder.append("-----------------------------\n");
         System.out.println(builder);
@@ -147,21 +149,20 @@ public class OrderlyWorkshop implements Workshop {
             var workplace = workplaces.get(wid);
             var time = currentTime++;
 
-            if (shouldWait(time)) {
-                // logState(String.format("enter[%s->%s] queue.await(%s)", Identification.uid(), wid, time));
+            if (!workplace.isEmpty() || shouldWait(time)) {
+                 logState(String.format("enter[%s->%s] queue.await(%s)", Identification.uid(), wid, time));
                 mutex.release();
                 queue.await(time);
             }
 
             if (workplace.isAwaited() || !workplace.isEmpty()) {
-                // logState(String.format("enter[%s->%s] workplace.await(%s)", Identification.uid(), wid, time));
-                mutex.release();
-                workplace.await();
+                 logState(String.format("enter[%s->%s] workplace.await(%s)", Identification.uid(), wid, time));
+                workplace.await(mutex);
             }
 
             workplace.occupy();
             workplaces.updateMapping(workplace);
-            // logState(String.format("enter[%s->%s] workplace occupied", Identification.uid(), wid));
+             logState(String.format("enter[%s->%s] workplace occupied", Identification.uid(), wid));
             mutex.release();
 
             return workplace;
@@ -220,24 +221,25 @@ public class OrderlyWorkshop implements Workshop {
 
                 doneLatch = new CountDownLatch(cycle.size());
                 var latch = new CountDownLatch(cycle.size());
+                var useLatch = new CountDownLatch(cycle.size());
                 for (var p : cycle) {
-                    workplaces.get(p).giveLatch(latch, doneLatch);
+                    workplaces.get(p).giveLatch(latch, doneLatch, useLatch);
                 }
             } else {
                 logState(String.format("switch_to[%s->%s]->occupied->no cycle", Identification.uid(), wid));
-                mutex.release();
-                workplace.await();
+                workplace.await(mutex);
             }
 
             var cascades = current.hasLatch();
 
             logState(String.format("switch_to[%s->%s]->occupied->occupying[cas:%s]", Identification.uid(), wid, cascades));
-            workplace.occupy();
-            workplaces.updateMapping(workplace);
             if (!cascades) {
                 current.leave();
                 workplaces.updateMapping(current);
             }
+            workplace.occupy();
+            workplaces.updateMapping(workplace);
+
             requests.remove(e);
             if (current.isAwaited()) {
                 logState(String.format("switch_to[%s->%s]->occupied->signaling", Identification.uid(), wid));

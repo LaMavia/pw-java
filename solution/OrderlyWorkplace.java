@@ -6,10 +6,10 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
 
 public class OrderlyWorkplace extends Workplace {
-    // private final Semaphore ownership = new Semaphore(1, true);
+    private final Semaphore ownership = new Semaphore(1, true);
     private final Semaphore delay = new Semaphore(0, true);
     private final Semaphore mutex = new Semaphore(1, true);
-    private CountDownLatch latch, doneLatch;
+    private CountDownLatch latch, doneLatch, useLatch;
     private int awaiting = 0;
     // state
     private WorkplaceState state = WorkplaceState.Empty;
@@ -39,11 +39,12 @@ public class OrderlyWorkplace extends Workplace {
         return awaiting > 0;
     }
 
-    public void await() throws InterruptedException {
+    public void await(Semaphore foreignMutex) throws InterruptedException {
         mutex.acquire();
         awaiting++;
         mutex.release();
 
+        foreignMutex.release();
         delay.acquire();
 
         mutex.acquire();
@@ -59,13 +60,17 @@ public class OrderlyWorkplace extends Workplace {
         return awaiting;
     }
 
-    public void giveLatch(CountDownLatch l, CountDownLatch dl) {
+    public void giveLatch(CountDownLatch l, CountDownLatch dl, CountDownLatch ul) throws InterruptedException {
+        mutex.acquire();
         latch = l;
         doneLatch = dl;
+        useLatch = ul;
+        mutex.release();
     }
 
     public void awaitLatch() throws InterruptedException {
         latch.countDown();
+        System.out.printf("awaitingLatch[%s]: casc: %s, done: %s\n", Identification.uid(), latch.getCount(), doneLatch.getCount());
         latch.await();
     }
 
@@ -90,7 +95,6 @@ public class OrderlyWorkplace extends Workplace {
 
     public void occupy() throws InterruptedException {
         mutex.acquire();
-        // ownership.acquire();
         userId = Thread.currentThread().getId();
         state = WorkplaceState.Before;
         mutex.release();
@@ -100,6 +104,11 @@ public class OrderlyWorkplace extends Workplace {
     public void use() {
         try {
             mutex.acquire();
+            if (useLatch != null) {
+                useLatch.countDown();
+                useLatch.await();
+            }
+//            ownership.acquire();
             internalWorkplace.use();
             state = WorkplaceState.Done;
             var b = new StringBuilder();
@@ -116,7 +125,7 @@ public class OrderlyWorkplace extends Workplace {
             mutex.acquire();
             userId = 0;
             state = WorkplaceState.Empty;
-            // ownership.release();
+//            ownership.release();
             mutex.release();
         } catch (InterruptedException e) {
             ErrorHandling.panic();
