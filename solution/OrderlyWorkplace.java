@@ -40,8 +40,17 @@ public class OrderlyWorkplace extends Workplace {
         return awaiting;
     }
 
+    public void log(StringBuilder builder) {
+        builder.append(String.format("uid: %s, pid: %s, state: %s, awaiting: %s", userId, Thread.currentThread().getId(), state, awaiting));
+    }
+
     public void occupy(Semaphore mutex) throws InterruptedException {
-        var willAwait = isOccupied();
+        var willAwait = state != WorkplaceState.Empty;
+        StringBuilder b = new StringBuilder();
+        b.append(String.format("occupy[%s->%s]->will await = %s\n", Thread.currentThread().getId(), getId(), willAwait));
+        log(b);
+        System.out.println(b);
+
         if (willAwait) {
             awaiting++;
             mutex.release();
@@ -61,7 +70,10 @@ public class OrderlyWorkplace extends Workplace {
     public void use() {
         internalWorkplace.use();
         state = WorkplaceState.Done;
-        queue.signal();
+
+        if (!isAwaited()) {
+            queue.signal();
+        }
     }
 
     /* true is state->Empty */
@@ -69,6 +81,10 @@ public class OrderlyWorkplace extends Workplace {
         userId = 0;
         state = WorkplaceState.Empty;
         ownership.release();
+
+        if (!isAwaited()) {
+            queue.signal();
+        }
     }
 
     public long getUserId() {

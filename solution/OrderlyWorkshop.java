@@ -70,13 +70,14 @@ public class OrderlyWorkshop implements Workshop {
         this.workplaces = new WorkplaceMap(workplaces, queue);
     }
 
-    private void leaveCurrentWorkplace(boolean release) {
+    private boolean leaveCurrentWorkplace(boolean release) {
         var currentWorkplace = workplaces.getThroughUser(uid());
         if (currentWorkplace == null) {
             ErrorHandling.panic();
         }
 
         logState("leaveCurrentWorkplace->leave");
+        var isAwaited = currentWorkplace.getAwaiting() > 0;
         currentWorkplace.leave();
         workplaces.updateMapping(currentWorkplace);
 
@@ -87,6 +88,8 @@ public class OrderlyWorkshop implements Workshop {
             logState("leaveCurrentWorkplace->release");
             mutex.release();
         }
+
+        return isAwaited;
     }
 
     private long uid() {
@@ -134,27 +137,50 @@ public class OrderlyWorkshop implements Workshop {
     public Workplace switchTo(WorkplaceId wid) {
         try {
             mutex.acquire();
+
             var myTime = currentTime++;
             var workplace = workplaces.get(wid);
 
             if (workplace.isOccupied()) {
-                logState(String.format("switchTo[%s]->occupied", wid));
+                logState(String.format("switch[%s]->occupied", wid));
                 mutex.release();
                 queue.await(myTime);
             }
 
-            logState(String.format("switchTo[%s]->leaving current", wid));
             leaveCurrentWorkplace(false);
-            logState(String.format("switchTo[%s]->occupying", wid));
+            logState(String.format("switch[%s]->occupied->occupying", wid));
             workplace.occupy(mutex);
             workplaces.updateMapping(workplace);
-            logState("switchTo->done");
-            mutex.release();
 
+            mutex.release();
             return workplace;
         } catch (InterruptedException e) {
             ErrorHandling.panic();
         }
+//        try {
+//            logState(String.format("switchTo[%s]->mutex", wid));
+//            mutex.acquire();
+//            var myTime = currentTime++;
+//            var workplace = workplaces.get(wid);
+//
+//            if (workplace.getState() == OrderlyWorkplace.WorkplaceState.Before) {
+//                logState(String.format("switchTo[%s]->occupied", wid));
+//                mutex.release();
+//                queue.await(myTime);
+//            }
+//
+//            logState(String.format("switchTo[%s]->leaving current", wid));
+//            leaveCurrentWorkplace(false);
+//            logState(String.format("switchTo[%s]->occupying", wid));
+//            workplace.occupy(mutex);
+//            workplaces.updateMapping(workplace);
+//            logState("switchTo->done");
+//            mutex.release();
+//
+//            return workplace;
+//        } catch (InterruptedException e) {
+//            ErrorHandling.panic();
+//        }
 
         return null;
     }
