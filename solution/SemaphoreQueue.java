@@ -1,5 +1,7 @@
 package cp2022.solution;
 
+import cp2022.base.WorkplaceId;
+
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.PriorityQueue;
@@ -9,9 +11,13 @@ public class SemaphoreQueue {
     public static class SemaphoreQueueItem {
         private final Semaphore delay = new Semaphore(0);
         private long time = 0;
+        private long uid;
+        private final WorkplaceId wid;
 
-        public SemaphoreQueueItem(long currentTime) {
+        public SemaphoreQueueItem(long currentTime, WorkplaceId wid) {
             time = currentTime;
+            uid = Identification.uid();
+            this.wid = wid;
         }
 
         public void await() throws InterruptedException {
@@ -31,7 +37,7 @@ public class SemaphoreQueue {
 
         @Override
         public String toString() {
-            return String.valueOf(time);
+            return String.format("(u: %s, w:%s, t: %s)", uid, wid, time);
         }
     }
 
@@ -60,11 +66,21 @@ public class SemaphoreQueue {
         return queue.peek().time;
     }
 
-    public void await(long currentTime) throws InterruptedException {
-        var item = new SemaphoreQueueItem(currentTime);
+    public void await(long currentTime, WorkplaceId wid) throws InterruptedException {
+        var item = new SemaphoreQueueItem(currentTime, wid);
         queue.add(item);
 
         item.await();
+    }
+
+    public boolean isAwaited(WorkplaceId wid) {
+        for (var item : queue) {
+            if (item.wid == wid) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public void signal() {

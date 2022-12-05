@@ -127,6 +127,10 @@ public class OrderlyWorkshop implements Workshop {
     }
 
     private void logState(String label) {
+        final boolean doLog = true;
+        if (!doLog) {
+            return;
+        }
         var builder = new StringBuilder();
         builder.append("-----------------------------\n")
                 .append(String.format("uid: %d, t: %d, mutex: %s, %s\n", Identification.uid(), currentTime, mutex.availablePermits(), label))
@@ -139,7 +143,7 @@ public class OrderlyWorkshop implements Workshop {
 
 
     private boolean shouldWait(long myTime) {
-        return !queue.isEmpty() && Math.abs(myTime - queue.minTime()) >= n - 1;
+        return !queue.isEmpty() && Math.abs(myTime - queue.minTime()) >= 2*n - 1;
     }
 
     @Override
@@ -152,7 +156,7 @@ public class OrderlyWorkshop implements Workshop {
             if (!workplace.isEmpty() || shouldWait(time)) {
                  logState(String.format("enter[%s->%s] queue.await(%s)", Identification.uid(), wid, time));
                 mutex.release();
-                queue.await(time);
+                queue.await(time, wid);
             }
 
             if (workplace.isAwaited() || !workplace.isEmpty()) {
@@ -177,9 +181,9 @@ public class OrderlyWorkshop implements Workshop {
     @Override
     public Workplace switchTo(WorkplaceId wid) {
         try {
-            logState(String.format("switch_to[%s->%s]->getting mutex", Identification.uid(), wid));
+//            logState(String.format("switch_to[%s->%s]->getting mutex", Identification.uid(), wid));
             mutex.acquire();
-            logState(String.format("switch_to[%s->%s]->got mutex", Identification.uid(), wid));
+//            logState(String.format("switch_to[%s->%s]->got mutex", Identification.uid(), wid));
             var workplace = workplaces.get(wid);
             var uid = Identification.uid();
             var current = workplaces.getThroughUser(uid);
@@ -189,7 +193,7 @@ public class OrderlyWorkshop implements Workshop {
             if (shouldWait(time)) {
                 logState(String.format("switch_to[%s->%s]->queue.await(%s)", Identification.uid(), wid, time));
                 mutex.release();
-                queue.await(time);
+                queue.await(time, wid);
             }
             if (!workplace.isAwaited() && workplace.isEmpty()) {
                 logState(String.format("switch_to[%s->%s]->free->occupying", Identification.uid(), wid));
