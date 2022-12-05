@@ -4,8 +4,8 @@ import cp2022.base.Workplace;
 import cp2022.base.WorkplaceId;
 import cp2022.base.Workshop;
 
-import java.util.Collection;
-import java.util.HashMap;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 
 public class OrderlyWorkshop implements Workshop {
@@ -59,6 +59,58 @@ public class OrderlyWorkshop implements Workshop {
         }
     }
 
+    private static class Requests {
+        public static class Edge {
+            private final WorkplaceId from;
+            private final WorkplaceId to;
+
+            public Edge(WorkplaceId f, WorkplaceId t) {
+                from = f;
+                to = t;
+            }
+
+            public WorkplaceId getFrom() {
+                return from;
+            }
+
+            public WorkplaceId getTo() {
+                return to;
+            }
+        }
+        private final ConcurrentHashMap<WorkplaceId, WorkplaceId> matrix;
+
+        public Requests(int n) {
+            matrix = new ConcurrentHashMap<>(n);
+        }
+
+        public Edge add(WorkplaceId from, WorkplaceId to) {
+            matrix.put(from, to);
+
+            return new Edge(from, to);
+        }
+        public void remove(Edge e) {
+            matrix.remove(e.getFrom(), e.getTo());
+        }
+
+        // Cycle := getCycle(e)
+        public Set<WorkplaceId> getCycle(Edge e) {
+            var seenNodes = new HashSet<WorkplaceId>();
+            var currentNode = e.getTo();
+
+            seenNodes.add(e.getFrom());
+            while (matrix.containsKey(currentNode)) {
+                if (seenNodes.contains(currentNode)) {
+                    break;
+                }
+
+                seenNodes.add(currentNode);
+                currentNode = matrix.get(currentNode);
+            }
+
+            return seenNodes.contains(e.getFrom()) ? seenNodes : null;
+        }
+    }
+
     private final SemaphoreQueue queue;
     private final WorkplaceMap workplaces;
     private final Semaphore mutex = new Semaphore(1, true);
@@ -70,28 +122,6 @@ public class OrderlyWorkshop implements Workshop {
         queue = new SemaphoreQueue(workplaces.size() * 2);
         this.workplaces = new WorkplaceMap(workplaces, queue);
         n = workplaces.size();
-    }
-
-    private boolean leaveCurrentWorkplace(boolean release) {
-        var currentWorkplace = workplaces.getThroughUser(Identification.uid());
-        if (currentWorkplace == null) {
-            ErrorHandling.panic();
-        }
-
-        logState("leaveCurrentWorkplace->leave");
-        var isAwaited = currentWorkplace.getAwaiting() > 0;
-        currentWorkplace.leave();
-        workplaces.updateMapping(currentWorkplace);
-
-        if (!queue.isEmpty()) {
-            logState("leaveCurrentWorkplace->queue");
-            queue.signal();
-        } else if (release) {
-            logState("leaveCurrentWorkplace->release");
-            mutex.release();
-        }
-
-        return isAwaited;
     }
 
     private void logState(String label) {
@@ -117,19 +147,19 @@ public class OrderlyWorkshop implements Workshop {
             var time = currentTime++;
 
             if (!queue.isEmpty() && shouldWait(time)) {
-                logState(String.format("enter[%s->%s] queue.await(%s)", Identification.uid(), wid, time));
+                // logState(String.format("enter[%s->%s] queue.await(%s)", Identification.uid(), wid, time));
                 queue.await(time);
             }
 
             if (workplace.isAwaited() || !workplace.isEmpty()) {
-                logState(String.format("enter[%s->%s] workplace.await(%s)", Identification.uid(), wid, time));
+                // logState(String.format("enter[%s->%s] workplace.await(%s)", Identification.uid(), wid, time));
                 mutex.release();
                 workplace.await();
             }
 
             workplace.occupy();
             workplaces.updateMapping(workplace);
-            logState(String.format("enter[%s->%s] workplace occupied", Identification.uid(), wid));
+            // logState(String.format("enter[%s->%s] workplace occupied", Identification.uid(), wid));
             mutex.release();
 
             return workplace;
@@ -192,10 +222,10 @@ switch(wid):
             mutex.V()
         return workplace
     else:
-        e := requests.add(current.id(), wid)    // @todo
-        if (isInACycle(e)):                     // @todo
-            k, Cycle := getCycle(e)             // @todo
-            L := countdownLatch(k)
+        e := requests.add(current.id(), wid)
+        Cycle := getCycle(e)
+        if (Cycle):
+            L := countdownLatch(Cycle.size())
             for (p in Cycle):
                 p.giveLatch(L)
                 { (latch) => this.latch = latch; }
@@ -204,6 +234,7 @@ switch(wid):
             workplace.delay.P() { #awaited++; P(); }
         workplace.occupy()
         current.leave()
+        requests.remove(e)
         if (current.isAwaited()):
             current.delay.V()
         latch.await()
