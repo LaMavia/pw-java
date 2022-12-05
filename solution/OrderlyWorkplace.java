@@ -101,3 +101,46 @@ public class OrderlyWorkplace extends Workplace {
         return userId;
     }
 }
+
+/*
+switch(wid):
+    mutex.P()
+    workplace := workplaces.get(wid)
+    current := workplaces.getThroughUser(uid())
+    time := currentTime++
+
+    if (!queue.isEmpty() && |time - queue.minTime()| >= n): queue.await(time)
+    if (!workplace.isAwaited() && workplace.isEmpty()): {isEmpty(): userId == 0 }
+        workplace.occupy() { userId = uid() }
+        current.leave() { userId = 0 }
+        if (current.isAwaited()):
+            current.delay.V() // someone's in
+        else:
+            mutex.V()
+        return workplace
+    else:
+        e := requests.add(current.id(), wid)    // @todo
+        if (isInACycle(e)):                     // @todo
+            k, Cycle := getCycle(e)             // @todo
+            L := countdownLatch(k)
+            for (p in Cycle):
+                p.giveLatch(L)
+                { (latch) => this.latch = latch; }
+        else:
+            mutex.V()
+            workplace.delay.P() { #awaited++; P(); }
+        workplace.occupy()
+        current.leave()
+        if (current.isAwaited()):
+            current.delay.V()
+        latch.await()
+        if (I'm last):
+            mutex.V()
+
+        return workplace
+
+
+
+
+
+* */
