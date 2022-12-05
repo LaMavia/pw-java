@@ -39,7 +39,7 @@ public class SemaphoreQueue {
         return queue.size();
     }
 
-    public boolean empty() {
+    public boolean isEmpty() {
         return queue.isEmpty();
     }
 

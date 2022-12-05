@@ -17,7 +17,7 @@ public class OrderlyWorkshop implements Workshop {
             this.workplaces = new HashMap<>(workplaces.size());
 
             for (var workplace : workplaces) {
-                this.workplaces.put(workplace.getId(), new OrderlyWorkplace(workplace, queue));
+                this.workplaces.put(workplace.getId(), new OrderlyWorkplace(workplace));
             }
 
             this.users = new HashMap<>();
@@ -73,7 +73,7 @@ public class OrderlyWorkshop implements Workshop {
     }
 
     private boolean leaveCurrentWorkplace(boolean release) {
-        var currentWorkplace = workplaces.getThroughUser(uid());
+        var currentWorkplace = workplaces.getThroughUser(Identification.uid());
         if (currentWorkplace == null) {
             ErrorHandling.panic();
         }
@@ -83,7 +83,7 @@ public class OrderlyWorkshop implements Workshop {
         currentWorkplace.leave();
         workplaces.updateMapping(currentWorkplace);
 
-        if (!queue.empty()) {
+        if (!queue.isEmpty()) {
             logState("leaveCurrentWorkplace->queue");
             queue.signal();
         } else if (release) {
@@ -94,14 +94,10 @@ public class OrderlyWorkshop implements Workshop {
         return isAwaited;
     }
 
-    private long uid() {
-        return Thread.currentThread().getId();
-    }
-
     private void logState(String label) {
         var builder = new StringBuilder();
         builder.append("-----------------------------\n")
-                .append(String.format("uid: %d, t: %d, %s\n", uid(), currentTime, label));
+                .append(String.format("uid: %d, t: %d, %s\n", Identification.uid(), currentTime, label));
         workplaces.logState(builder);
         builder.append("-----------------------------\n");
         System.out.println(builder);
@@ -109,27 +105,31 @@ public class OrderlyWorkshop implements Workshop {
 
 
     private boolean shouldWait(long myTime) {
-        if (queue.empty()) return false;
+        if (queue.isEmpty()) return false;
         return Math.abs(myTime - queue.minTime()) >= n - 1;
     }
-
 
     @Override
     public Workplace enter(WorkplaceId wid) {
         try {
             mutex.acquire();
-            var myTime = currentTime++;
             var workplace = workplaces.get(wid);
+            var time = currentTime++;
 
-            if (workplace.isOccupied() || shouldWait(myTime)) {
-                logState(String.format("enter[%s]->occupied", wid));
-                mutex.release();
-                queue.await(myTime);
+            if (!queue.isEmpty() && shouldWait(time)) {
+                logState(String.format("enter[%s->%s] queue.await(%s)", Identification.uid(), wid, time));
+                queue.await(time);
             }
 
-            logState(String.format("enter[%s]->occupying", wid));
-            workplace.occupy(mutex);
+            if (workplace.isAwaited() || !workplace.isEmpty()) {
+                logState(String.format("enter[%s->%s] workplace.await(%s)", Identification.uid(), wid, time));
+                mutex.release();
+                workplace.await();
+            }
+
+            workplace.occupy();
             workplaces.updateMapping(workplace);
+            logState(String.format("enter[%s->%s] workplace occupied", Identification.uid(), wid));
             mutex.release();
 
             return workplace;
@@ -143,32 +143,11 @@ public class OrderlyWorkshop implements Workshop {
 
     @Override
     public Workplace switchTo(WorkplaceId wid) {
-        try {
-            mutex.acquire();
-
-            var myTime = currentTime++;
-            var workplace = workplaces.get(wid);
-            var currentWorkplace = workplaces.getThroughUser(uid());
-
-            if (workplace.isOccupied() || shouldWait(myTime)) {
-                logState(String.format("switch[%s]->occupied", wid));
-                mutex.release();
-                queue.await(myTime);
-            }
-
-            leaveCurrentWorkplace(false);
-            logState(String.format("switch[%s]->occupied->occupying", wid));
-            workplace.occupy(mutex);
-            workplaces.updateMapping(workplace);
-
-            mutex.release();
-            assert currentWorkplace != null;
-            currentWorkplace.usability.release();
-
-            return workplace;
-        } catch (InterruptedException e) {
-            ErrorHandling.panic();
-        }
+//        try {
+//
+//        } catch (InterruptedException e) {
+//            ErrorHandling.panic();
+//        }
 
         return null;
     }
@@ -177,19 +156,85 @@ public class OrderlyWorkshop implements Workshop {
     public void leave() {
         try {
             mutex.acquire();
-            logState("leave");
-            var currentWorkplace = workplaces.getThroughUser(uid());
-            leaveCurrentWorkplace(true);
-            assert currentWorkplace != null;
-            currentWorkplace.usability.release();
+            var workplace = workplaces.getThroughUser(Identification.uid());
+            assert workplace != null;
+
+            workplace.leave();
+            workplaces.updateMapping(workplace);
+            if (workplace.isAwaited()) {
+                workplace.signal();
+            } else if (!queue.isEmpty()) {
+                queue.signal();
+            } else {
+                mutex.release();
+            }
         } catch (InterruptedException e) {
             ErrorHandling.panic();
         }
     }
 }
 
+
 /*
- * q, workplaces
- *
- *
- * */
+switch(wid):
+    mutex.P()
+    workplace := workplaces.get(wid)
+    current := workplaces.getThroughUser(uid())
+    time := currentTime++
+
+    if (!queue.isEmpty() && |time - queue.minTime()| >= n): queue.await(time)
+    if (!workplace.isAwaited() && workplace.isEmpty()): {isEmpty(): userId == 0 }
+        workplace.occupy() { userId = uid() }
+        current.leave() { userId = 0 }
+        if (current.isAwaited()):
+            current.delay.V() // someone's in
+        else:
+            mutex.V()
+        return workplace
+    else:
+        e := requests.add(current.id(), wid)    // @todo
+        if (isInACycle(e)):                     // @todo
+            k, Cycle := getCycle(e)             // @todo
+            L := countdownLatch(k)
+            for (p in Cycle):
+                p.giveLatch(L)
+                { (latch) => this.latch = latch; }
+        else:
+            mutex.V()
+            workplace.delay.P() { #awaited++; P(); }
+        workplace.occupy()
+        current.leave()
+        if (current.isAwaited()):
+            current.delay.V()
+        latch.await()
+        if (I'm last):
+            mutex.V()
+
+        return workplace
+
+
+leave():
+    mutex.P()
+    workplace := workplaces.getThroughUser(uid())
+    workplace.leave()
+    if (workplace.isAwaited()):
+        workplace.delay.V()
+    else if (!queue.isEmpty()):
+        queue.signal()
+    else:
+        mutex.V()
+
+enter():
+    mutex.P()
+    workplace := workplaces.get(wid)
+    time := currentTime++
+
+    if (!queue.isEmpty() && |time - queue.minTime()| >= n): queue.await(time)
+    if (workplace.isAwaited() || workplace.isEmpty()): {isEmpty(): userId == 0 }
+        mutex.V()
+        workplace.delay.P()
+    workplace.occupy()
+    mutex.V()
+    return workplace
+
+* */

@@ -5,14 +5,15 @@ import cp2022.base.Workplace;
 import java.util.concurrent.Semaphore;
 
 public class OrderlyWorkplace extends Workplace {
-    private final Semaphore ownership = new Semaphore(1, true);
-    public final Semaphore usability = new Semaphore(1, true);
+    // private final Semaphore ownership = new Semaphore(1, true);
+    private final Semaphore delay = new Semaphore(0, true);
+    private final Semaphore mutex = new Semaphore(1, true);
     private int awaiting = 0;
     // state
     private WorkplaceState state = WorkplaceState.Empty;
     private long userId = 0;
     private final Workplace internalWorkplace;
-    private final SemaphoreQueue queue;
+    // private final SemaphoreQueue queue;
     // private Semaphore mutex = new Semaphore(1, true);
 
     public enum WorkplaceState {
@@ -23,22 +24,33 @@ public class OrderlyWorkplace extends Workplace {
         return state;
     }
 
-    public OrderlyWorkplace(Workplace workplace, SemaphoreQueue queue) {
+    public OrderlyWorkplace(Workplace workplace) {
         super(workplace.getId());
         internalWorkplace = workplace;
-        this.queue = queue;
     }
 
-    public boolean isOccupied() {
-        if (userId == Thread.currentThread().getId()) {
-            return false;
-        }
-        return state == WorkplaceState.Before;
-        // return !(userId == Thread.currentThread().getId() || state == WorkplaceState.Empty);
+    public boolean isEmpty() {
+        return state == WorkplaceState.Empty;
     }
 
-    private boolean isAwaited() {
+    public boolean isAwaited() {
         return awaiting > 0;
+    }
+
+    public void await() throws InterruptedException {
+        mutex.acquire();
+        awaiting++;
+        mutex.release();
+
+        delay.acquire();
+
+        mutex.acquire();
+        awaiting--;
+        mutex.release();
+    }
+
+    public void signal() {
+        delay.release();
     }
 
     public int getAwaiting() {
@@ -49,51 +61,35 @@ public class OrderlyWorkplace extends Workplace {
         builder.append(String.format("uid: %s, pid: %s, state: %s, awaiting: %s", userId, Thread.currentThread().getId(), state, awaiting));
     }
 
-    public void occupy(Semaphore mutex) throws InterruptedException {
-        var willAwait = state != WorkplaceState.Before;
-        StringBuilder b = new StringBuilder();
-        b.append(String.format("occupy[%s->%s]->will await = %s\n", Thread.currentThread().getId(), getId(), willAwait));
-        log(b);
-        System.out.println(b);
-
-        if (willAwait) {
-            awaiting++;
-            mutex.release();
-        }
-
-        ownership.acquire();
-
-        if (willAwait) {
-            awaiting--;
-        }
-
+    public void occupy() throws InterruptedException {
+        mutex.acquire();
+        // ownership.acquire();
         userId = Thread.currentThread().getId();
         state = WorkplaceState.Before;
+        mutex.release();
     }
 
     @Override
     public void use() {
         try {
-            usability.acquire();
+            mutex.acquire();
             internalWorkplace.use();
             state = WorkplaceState.Done;
-
-            if (!isAwaited()) {
-                queue.signal();
-            }
+            mutex.release();
         } catch (InterruptedException e) {
             ErrorHandling.panic();
         }
     }
 
-    /* true is state->Empty */
     public void leave() {
-        userId = 0;
-        state = WorkplaceState.Empty;
-        ownership.release();
-
-        if (!isAwaited()) {
-            queue.signal();
+        try {
+            mutex.acquire();
+            userId = 0;
+            state = WorkplaceState.Empty;
+            // ownership.release();
+            mutex.release();
+        } catch (InterruptedException e) {
+            ErrorHandling.panic();
         }
     }
 
@@ -101,46 +97,3 @@ public class OrderlyWorkplace extends Workplace {
         return userId;
     }
 }
-
-/*
-switch(wid):
-    mutex.P()
-    workplace := workplaces.get(wid)
-    current := workplaces.getThroughUser(uid())
-    time := currentTime++
-
-    if (!queue.isEmpty() && |time - queue.minTime()| >= n): queue.await(time)
-    if (!workplace.isAwaited() && workplace.isEmpty()): {isEmpty(): userId == 0 }
-        workplace.occupy() { userId = uid() }
-        current.leave() { userId = 0 }
-        if (current.isAwaited()):
-            current.delay.V() // someone's in
-        else:
-            mutex.V()
-        return workplace
-    else:
-        e := requests.add(current.id(), wid)    // @todo
-        if (isInACycle(e)):                     // @todo
-            k, Cycle := getCycle(e)             // @todo
-            L := countdownLatch(k)
-            for (p in Cycle):
-                p.giveLatch(L)
-                { (latch) => this.latch = latch; }
-        else:
-            mutex.V()
-            workplace.delay.P() { #awaited++; P(); }
-        workplace.occupy()
-        current.leave()
-        if (current.isAwaited()):
-            current.delay.V()
-        latch.await()
-        if (I'm last):
-            mutex.V()
-
-        return workplace
-
-
-
-
-
-* */
