@@ -6,6 +6,7 @@ import java.util.concurrent.Semaphore;
 
 public class OrderlyWorkplace extends Workplace {
     private final Semaphore ownership = new Semaphore(1, true);
+    public final Semaphore usability = new Semaphore(1, true);
     private int awaiting = 0;
     // state
     private WorkplaceState state = WorkplaceState.Empty;
@@ -29,7 +30,11 @@ public class OrderlyWorkplace extends Workplace {
     }
 
     public boolean isOccupied() {
-        return !(userId == Thread.currentThread().getId() || state != WorkplaceState.Before);
+        if (userId == Thread.currentThread().getId()) {
+            return false;
+        }
+        return state == WorkplaceState.Before;
+        // return !(userId == Thread.currentThread().getId() || state == WorkplaceState.Empty);
     }
 
     private boolean isAwaited() {
@@ -45,7 +50,7 @@ public class OrderlyWorkplace extends Workplace {
     }
 
     public void occupy(Semaphore mutex) throws InterruptedException {
-        var willAwait = state != WorkplaceState.Empty;
+        var willAwait = state != WorkplaceState.Before;
         StringBuilder b = new StringBuilder();
         b.append(String.format("occupy[%s->%s]->will await = %s\n", Thread.currentThread().getId(), getId(), willAwait));
         log(b);
@@ -68,11 +73,16 @@ public class OrderlyWorkplace extends Workplace {
 
     @Override
     public void use() {
-        internalWorkplace.use();
-        state = WorkplaceState.Done;
+        try {
+            usability.acquire();
+            internalWorkplace.use();
+            state = WorkplaceState.Done;
 
-        if (!isAwaited()) {
-            queue.signal();
+            if (!isAwaited()) {
+                queue.signal();
+            }
+        } catch (InterruptedException e) {
+            ErrorHandling.panic();
         }
     }
 

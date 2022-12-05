@@ -43,6 +43,12 @@ public class SemaphoreQueue {
         return queue.isEmpty();
     }
 
+    public void logTimes(StringBuilder b) {
+        for (var node : queue) {
+            b.append(String.format("%s ", node.time));
+        }
+    }
+
     public long minTime() {
         assert queue.peek() != null;
         return queue.peek().time;
@@ -59,7 +65,12 @@ public class SemaphoreQueue {
         if (queue.isEmpty()) {
             return;
         }
+        var item = queue.poll();
+        StringBuilder b = new StringBuilder();
+        b.append(String.format("[Queue] signaling uid %s, t: %s\ntimes: ", Thread.currentThread().getId(), item.time));
+        logTimes(b);
+        System.out.println(b);
 
-        queue.poll().signal();
+        item.signal();
     }
 }
